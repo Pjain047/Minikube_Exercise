@@ -33,6 +33,15 @@
         })
         const data = await resp.json()
         out.textContent += JSON.stringify(data, null, 2)
+        // If server returned a docs URL, open it in a new tab
+        if (data && data.host) {
+          try {
+            const docs = (data.host.replace(/\/$/, '')) + '/docs'
+            window.open(docs, '_blank')
+          } catch (e) {
+            // ignore popup blockers
+          }
+        }
       } catch (e) {
         out.textContent += 'Error: ' + e.message
       }

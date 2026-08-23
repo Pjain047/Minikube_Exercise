@@ -1,10 +1,16 @@
 param(
-    [string]$Image
+    [string]$Image,
+    [string]$DockerUsername,
+    [string]$DockerPassword
 )
 
 if (-not $Image) {
     $Image = Read-Host "Enter Docker image (owner/repo:tag)"
 }
+
+# Allow picking credentials from environment variables if not passed as params
+if (-not $DockerUsername) { $DockerUsername = $env:DOCKERHUB_USERNAME }
+if (-not $DockerPassword) { $DockerPassword = $env:DOCKERHUB_TOKEN }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $repoRoot = Resolve-Path (Join-Path $scriptDir '..')
@@ -30,6 +36,15 @@ if (Test-Path (Join-Path $infra 'ingress.yaml')) {
 Write-Host "Applying manifests to cluster..."
 kubectl apply -f $gen
 
+# If Docker Hub credentials provided, create/update imagePullSecret in the cluster
+$credsProvided = $false
+if ($DockerUsername -and $DockerPassword) {
+    $credsProvided = $true
+    Write-Host "Creating/updating imagePullSecret 'regcred' using provided Docker Hub credentials"
+    $secretCmd = "kubectl create secret docker-registry regcred --docker-server=https://index.docker.io/v1/ --docker-username='$DockerUsername' --docker-password='$DockerPassword' --dry-run=client -o yaml | kubectl apply -f -"
+    Invoke-Expression $secretCmd
+}
+
 # Extract deployment name from generated deployment manifest
 $deployContent = Get-Content $deployOut -Raw
 $deployName = $null
@@ -39,6 +54,13 @@ if ($deployContent -match '(?s)kind:\s*Deployment.*?metadata:.*?name:\s*(\S+)') 
 
 if ($deployName) {
     Write-Host "Waiting for rollout of deployment: $deployName"
+    # If credentials were provided, patch the deployment to reference the imagePullSecret
+    if ($credsProvided) {
+        Write-Host "Patching deployment to use imagePullSecrets 'regcred'"
+        $patch = '{"spec":{"template":{"spec":{"imagePullSecrets":[{"name":"regcred"}]}}}}'
+        kubectl patch deployment/$deployName -p $patch | Out-Null
+    }
+
     kubectl rollout status deployment/$deployName --timeout=120s
 } else {
     Write-Warning "Could not determine deployment name from manifest. Skipping rollout wait."

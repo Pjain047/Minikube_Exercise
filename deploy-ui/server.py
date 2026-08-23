@@ -8,7 +8,8 @@ from pydantic import BaseModel
 
 app = FastAPI(title="Deploy UI Server")
 
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+DOCKERHUB_USERNAME = os.environ.get("DOCKERHUB_USERNAME")
+DOCKERHUB_TOKEN = os.environ.get("DOCKERHUB_TOKEN")
 
 
 @app.get("/tags")
@@ -17,121 +18,77 @@ async def get_tags(repo: str):
         raise HTTPException(status_code=400, detail="repo must be user/repo")
     user, name = repo.split('/', 1)
     url = f"https://hub.docker.com/v2/repositories/{user}/{name}/tags?page_size=100"
+    headers = {}
     async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(url)
+        # If Docker Hub credentials are available as env vars, obtain a JWT token and use it
+        if DOCKERHUB_USERNAME and DOCKERHUB_TOKEN:
+            try:
+                auth_resp = await client.post('https://hub.docker.com/v2/users/login/', json={ 'username': DOCKERHUB_USERNAME, 'password': DOCKERHUB_TOKEN })
+                if auth_resp.status_code == 200:
+                    token = auth_resp.json().get('token')
+                    if token:
+                        headers['Authorization'] = f"JWT {token}"
+            except Exception:
+                # ignore auth failure and continue unauthenticated
+                pass
+
+        r = await client.get(url, headers=headers)
         if r.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Docker Hub API returned {r.status_code}")
+            # try to surface any error message
+            detail = None
+            try:
+                detail = r.json()
+            except Exception:
+                detail = r.text
+            raise HTTPException(status_code=502, detail=f"Docker Hub API returned {r.status_code}: {detail}")
         data = r.json()
         results = [ { 'name': t['name'], 'last_updated': t.get('last_updated'), 'full_size': t.get('full_size') } for t in data.get('results', []) ]
         return { 'results': results }
 
 
 class DispatchRequest(BaseModel):
-    owner: str
-    repo: str
     image: str
-    ref: Optional[str] = 'main'
-    mode: Optional[str] = None  # 'local' or 'github'
+
+
+class DeployLocalRequest(BaseModel):
+    image: str
 
 
 @app.post("/dispatch")
 async def dispatch(req: DispatchRequest):
-    mode = (req.mode or os.environ.get('DEPLOY_MODE') or 'local').lower()
+    # extract local deploy logic to helper and call it
+    return await _local_deploy(req.image)
 
-    if mode == 'github':
-        if not GITHUB_TOKEN:
-            raise HTTPException(status_code=500, detail="Server missing GITHUB_TOKEN environment variable for github mode")
 
-        headers = { 'Authorization': f'token {GITHUB_TOKEN}', 'Accept': 'application/vnd.github.v3+json' }
-        dispatch_url = f"https://api.github.com/repos/{req.owner}/{req.repo}/actions/workflows/manual-deploy-minikube.yml/dispatches"
-        body = { 'ref': req.ref, 'inputs': { 'image': req.image } }
-
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.post(dispatch_url, json=body, headers=headers)
-            if r.status_code not in (204, 201):
-                detail = await r.text()
-                raise HTTPException(status_code=502, detail=f"Dispatch failed {r.status_code}: {detail}")
-
-        # fallback to previous behavior: find run and poll
-        runs_url = f"https://api.github.com/repos/{req.owner}/{req.repo}/actions/workflows/manual-deploy-minikube.yml/runs?per_page=20"
-        actor = None
-        async with httpx.AsyncClient(timeout=10) as client:
-            u = await client.get('https://api.github.com/user', headers=headers)
-            if u.status_code == 200:
-                actor = u.json().get('login')
-
-        run = None
-        start = time.time()
-        timeout = 60
-        async with httpx.AsyncClient(timeout=20) as client:
-            while time.time() - start < timeout:
-                r = await client.get(runs_url, headers=headers)
-                if r.status_code == 200:
-                    data = r.json()
-                    for candidate in data.get('workflow_runs', []):
-                        if actor and candidate.get('actor', {}).get('login') == actor:
-                            run = candidate
-                            break
-                    if not run and data.get('workflow_runs'):
-                        run = data['workflow_runs'][0]
-                    if run:
-                        break
-                await httpx.sleep(3)
-
-        if not run:
-            raise HTTPException(status_code=504, detail='Workflow run not found after dispatch')
-
-        run_id = run['id']
-        run_url = f"https://api.github.com/repos/{req.owner}/{req.repo}/actions/runs/{run_id}"
-
-        # poll until complete
-        end_time = time.time() + 20*60
-        final = None
-        async with httpx.AsyncClient(timeout=20) as client:
-            while time.time() < end_time:
-                r = await client.get(run_url, headers=headers)
-                if r.status_code == 200:
-                    j = r.json()
-                    if j.get('status') == 'completed':
-                        final = j
-                        break
-                await httpx.sleep(5)
-
-        if not final:
-            raise HTTPException(status_code=504, detail='Timed out waiting for workflow run to complete')
-
-        host = 'http://my-minikubeapp.com'
-        health = None
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                h = await client.get(f"{host}/health")
-                health = { 'status': h.status_code, 'body': h.text }
-        except Exception as e:
-            health = { 'error': str(e) }
-
-        return {
-            'conclusion': final.get('conclusion'),
-            'run_id': run_id,
-            'run_number': final.get('run_number'),
-            'host': host,
-            'version': req.image,
-            'health': health,
-            'run_url': final.get('html_url')
-        }
-
-    # local deploy mode: run commands on this machine to load image into minikube and apply manifests
-    # This requires kubectl and minikube (or docker) installed on the server host.
-    IMAGE = req.image
+async def _local_deploy(image: str):
     import subprocess, shutil, json, tempfile
 
     def run_cmd(cmd, check=True):
         proc = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         return proc
 
+    IMAGE = image
     # 1) Try docker pull
     docker_available = shutil.which('docker') is not None
     minikube_available = shutil.which('minikube') is not None
     pull_errors = []
+    # If minikube is available, ensure it's running (start if necessary)
+    if minikube_available:
+        try:
+            s = run_cmd('minikube status')
+            out = (s.stdout or '') + (s.stderr or '')
+            if 'Running' not in out:
+                # attempt to start minikube
+                run_cmd('minikube start')
+                # wait until status shows Running
+                for _ in range(30):
+                    s2 = run_cmd('minikube status')
+                    o2 = (s2.stdout or '') + (s2.stderr or '')
+                    if 'Running' in o2:
+                        break
+                    time.sleep(2)
+        except Exception:
+            pass
     if docker_available:
         p = run_cmd(f"docker pull {IMAGE}")
         if p.returncode != 0:

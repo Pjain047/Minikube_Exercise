@@ -3,8 +3,12 @@ name: Publish Docker image to Docker Hub
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'App/**'
   pull_request:
     types: [closed]
+    paths:
+      - 'App/**'
 
 jobs:
   build-and-push:
