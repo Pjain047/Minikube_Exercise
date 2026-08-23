@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minikube-app
+  labels:
+    app: minikube-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minikube-app
+  template:
+    metadata:
+      labels:
+        app: minikube-app
+    spec:
+      containers:
+        - name: minikube-app
+          image: IMAGE_PLACEHOLDER
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5

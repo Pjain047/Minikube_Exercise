@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Local Deploy UI</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    label, input, button { display:block; margin:8px 0; }
+  </style>
+</head>
+<body>
+  <h2>Deploy Docker Hub Image to Minikube</h2>
+  <label>Docker image (owner/repo:tag)</label>
+  <input id="image" placeholder="myuser/myrepo:tag" style="width:400px" />
+  <label>Deploy server URL</label>
+  <input id="server" value="http://localhost:9000" style="width:400px" />
+  <button id="deploy">Trigger Deploy</button>
+  <pre id="output" style="background:#f6f6f6;padding:10px;max-height:300px;overflow:auto"></pre>
+
+  <script>
+    const out = document.getElementById('output')
+    document.getElementById('deploy').addEventListener('click', async () => {
+      out.textContent = ''
+      const image = document.getElementById('image').value.trim()
+      const server = document.getElementById('server').value.trim().replace(/\/$/, '')
+      if (!image) { out.textContent = 'Enter image'; return }
+      out.textContent = 'Posting deploy request...\n'
+      try {
+        const resp = await fetch(server + '/dispatch', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image, mode: 'local' })
+        })
+        const data = await resp.json()
+        out.textContent += JSON.stringify(data, null, 2)
+      } catch (e) {
+        out.textContent += 'Error: ' + e.message
+      }
+    })
+  </script>
+</body>
+</html>

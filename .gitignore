@@ -216,3 +216,22 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Application artifacts
+App/items.db
+
+# Generated manifests and temporary files
+generated-manifests/
+
+# Self-hosted runner folder
+runner/
+
+# Deploy UI virtualenv
+deploy-ui/.venv/
+
+# Local environment files
+.env.local
+.env
+
+# GitHub Actions temp
+.github/_work/
