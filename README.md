@@ -47,16 +47,25 @@ PowerShell quick start (recommended on Windows):
 
 Browser UI quick start (optional server flow):
 
-```bash
-cd deploy-ui
+Run the deploy server on the machine that has `kubectl`/`minikube` access, then open the static UI in your browser.
+
+```powershell
+cd C:\MyProject_2026\Minikube_Exercise\deploy-ui
+
+# create/activate venv (only once)
 python -m venv .venv
-# Windows PowerShell:
 .venv\Scripts\Activate
-pip install -r requirements.txt
-uvicorn deploy-ui.server:app --host 0.0.0.0 --port 9000
+
+# ensure server deps installed
+pip install fastapi uvicorn[standard] httpx pydantic
+
+# run uvicorn and watch logs (bind to localhost)
+uvicorn server:app --host 127.0.0.1 --port 9000 --reload
+
+# then open the static UI (serve or open local_deploy.html)
 ```
 
-Open `deploy-ui/local_deploy.html` in your browser, enter the Docker Hub image (for example `youruser/minikube-exercise-app:v20260822-ab12c3d`), and click `Trigger Deploy`. The server will perform a local-mode deploy: load/pull the image into Minikube, replace the placeholder, apply manifests, and wait for rollout.
+Open `deploy-ui/local_deploy.html` in your browser, enter the Docker Hub image (for example `youruser/minikube-exercise-app:v20260822-ab12c3d`), and click `Trigger Deploy`. The server will perform a local-mode deploy: load/pull the image into Minikube, replace the placeholder, apply manifests, and wait for rollout. The UI will open the Swagger UI once the service is available.
 
 
 

@@ -5,8 +5,18 @@ from typing import Optional
 import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Deploy UI Server")
+
+# Allow the local static UI (file://) and localhost to call the server
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 DOCKERHUB_USERNAME = os.environ.get("DOCKERHUB_USERNAME")
 DOCKERHUB_TOKEN = os.environ.get("DOCKERHUB_TOKEN")
